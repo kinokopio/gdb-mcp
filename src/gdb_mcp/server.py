@@ -104,6 +104,54 @@ class CallFunctionArgs(BaseModel):
     )
 
 
+class ReadMemoryArgs(BaseModel):
+    address: str = Field(
+        ...,
+        description="Memory address to read from (e.g., '0x404000', '$rsp', '$rdi+0x10')",
+    )
+    size: int = Field(
+        64,
+        description="Number of bytes to read (default: 64)",
+    )
+    format: str = Field(
+        "hex",
+        description="Output format: 'hex' (space-separated hex bytes), 'bytes' (raw hex string), 'string' (null-terminated string)",
+    )
+
+
+class WriteMemoryArgs(BaseModel):
+    address: str = Field(
+        ...,
+        description="Memory address to write to (e.g., '0x404000', '$rsp')",
+    )
+    data: str = Field(
+        ...,
+        description="Data to write as hex string (e.g., '90 90 90 90' or '9090909090')",
+    )
+
+
+class DisassembleArgs(BaseModel):
+    location: Optional[str] = Field(
+        None,
+        description="Location to disassemble: function name, address (e.g., '0x401000'), or empty for current PC",
+    )
+    count: int = Field(
+        20,
+        description="Number of instructions to disassemble (default: 20)",
+    )
+
+
+class SetWatchpointArgs(BaseModel):
+    expression: str = Field(
+        ...,
+        description="Expression to watch (e.g., '*0x404000' for memory address, 'variable_name' for variable)",
+    )
+    watch_type: str = Field(
+        "write",
+        description="Type of watchpoint: 'write' (break on write), 'read' (break on read), 'access' (break on read or write)",
+    )
+
+
 # List available tools
 @app.list_tools()
 async def list_tools() -> list[Tool]:
@@ -349,6 +397,47 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema=CallFunctionArgs.model_json_schema(),
         ),
+        Tool(
+            name="gdb_read_memory",
+            description=(
+                "Read memory from the target process with structured output. "
+                "Returns data in the requested format: 'hex' (space-separated bytes like '48 65 6c 6c 6f'), "
+                "'bytes' (raw hex string like '48656c6c6f'), or 'string' (null-terminated string). "
+                "Use for extracting decrypted strings, shellcode, configuration data, or inspecting data structures. "
+                "Address can be: hex address ('0x404000'), register ('$rsp'), or expression ('$rdi+0x10')."
+            ),
+            inputSchema=ReadMemoryArgs.model_json_schema(),
+        ),
+        Tool(
+            name="gdb_write_memory",
+            description=(
+                "Write data to memory in the target process. "
+                "Use for patching anti-debug checks (NOP out ptrace calls), modifying control flow, "
+                "or injecting test data. Data format: hex string with optional spaces (e.g., '90 90 90 90' or '90909090'). "
+                "WARNING: This modifies the target process memory and may affect program behavior."
+            ),
+            inputSchema=WriteMemoryArgs.model_json_schema(),
+        ),
+        Tool(
+            name="gdb_disassemble",
+            description=(
+                "Disassemble instructions at a location with structured output. "
+                "Returns an array of instruction objects with address and instruction fields. "
+                "Location can be: function name ('main'), hex address ('0x401000'), or empty for current PC. "
+                "Use for analyzing code flow, understanding obfuscation, or finding specific instruction patterns."
+            ),
+            inputSchema=DisassembleArgs.model_json_schema(),
+        ),
+        Tool(
+            name="gdb_set_watchpoint",
+            description=(
+                "Set a watchpoint to break when memory is accessed. "
+                "Types: 'write' (break on write), 'read' (break on read), 'access' (break on any access). "
+                "Use for detecting self-modifying code (SMC), tracking data flow, or finding where values change. "
+                "Expression can be: memory address ('*0x404000'), variable name, or C expression."
+            ),
+            inputSchema=SetWatchpointArgs.model_json_schema(),
+        ),
     ]
 
 
@@ -447,6 +536,35 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         elif name == "gdb_call_function":
             call_args: CallFunctionArgs = CallFunctionArgs(**arguments)
             result = gdb_session.call_function(function_call=call_args.function_call)
+
+        elif name == "gdb_read_memory":
+            mem_args: ReadMemoryArgs = ReadMemoryArgs(**arguments)
+            result = gdb_session.read_memory(
+                address=mem_args.address,
+                size=mem_args.size,
+                format=mem_args.format,
+            )
+
+        elif name == "gdb_write_memory":
+            write_args: WriteMemoryArgs = WriteMemoryArgs(**arguments)
+            result = gdb_session.write_memory(
+                address=write_args.address,
+                data=write_args.data,
+            )
+
+        elif name == "gdb_disassemble":
+            disasm_args: DisassembleArgs = DisassembleArgs(**arguments)
+            result = gdb_session.disassemble(
+                location=disasm_args.location,
+                count=disasm_args.count,
+            )
+
+        elif name == "gdb_set_watchpoint":
+            watch_args: SetWatchpointArgs = SetWatchpointArgs(**arguments)
+            result = gdb_session.set_watchpoint(
+                expression=watch_args.expression,
+                watch_type=watch_args.watch_type,
+            )
 
         else:
             result = {"status": "error", "message": f"Unknown tool: {name}"}

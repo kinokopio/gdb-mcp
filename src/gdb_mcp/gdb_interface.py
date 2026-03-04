@@ -1255,3 +1255,218 @@ class GDBSession:
             "function_call": function_call,
             "result": console_output.strip() if console_output else "(no return value)",
         }
+
+    def read_memory(self, address: str, size: int = 64, format: str = "hex") -> dict[str, Any]:
+        """
+        Read memory from the target process.
+
+        Args:
+            address: Memory address (e.g., '0x404000', '$rsp', '$rdi+0x10')
+            size: Number of bytes to read
+            format: Output format - 'hex', 'bytes', 'string'
+
+        Returns:
+            Dict with address, size, and data in requested format
+        """
+        if not self.controller:
+            return {"status": "error", "message": "No active GDB session"}
+
+        # Use GDB/MI command to read memory
+        # -data-read-memory-bytes address count
+        result = self.execute_command(f"-data-read-memory-bytes {address} {size}")
+
+        if result["status"] == "error":
+            return result
+
+        mi_result = self._extract_mi_result(result) or {}
+        memory_data = mi_result.get("memory", [])
+
+        if not memory_data:
+            return {"status": "error", "message": "No memory data returned"}
+
+        # Extract the contents (hex string without spaces)
+        raw_hex = memory_data[0].get("contents", "") if memory_data else ""
+
+        # Format output based on requested format
+        if format == "hex":
+            # Space-separated hex bytes: "48 65 6c 6c 6f"
+            formatted = " ".join(raw_hex[i : i + 2] for i in range(0, len(raw_hex), 2))
+        elif format == "bytes":
+            # Raw hex string: "48656c6c6f"
+            formatted = raw_hex
+        elif format == "string":
+            # Decode as string (stop at null)
+            try:
+                bytes_data = bytes.fromhex(raw_hex)
+                null_idx = bytes_data.find(b"\x00")
+                if null_idx != -1:
+                    bytes_data = bytes_data[:null_idx]
+                formatted = bytes_data.decode("utf-8", errors="replace")
+            except Exception as e:
+                formatted = f"(decode error: {e})"
+        else:
+            formatted = raw_hex
+
+        return {
+            "status": "success",
+            "address": address,
+            "size": size,
+            "format": format,
+            "data": formatted,
+        }
+
+    def write_memory(self, address: str, data: str) -> dict[str, Any]:
+        """
+        Write data to memory in the target process.
+
+        Args:
+            address: Memory address to write to
+            data: Hex string to write (spaces optional)
+
+        Returns:
+            Dict with status and bytes written
+        """
+        if not self.controller:
+            return {"status": "error", "message": "No active GDB session"}
+
+        # Remove spaces from hex data
+        hex_data = data.replace(" ", "")
+
+        # Validate hex string
+        try:
+            bytes_data = bytes.fromhex(hex_data)
+        except ValueError as e:
+            return {"status": "error", "message": f"Invalid hex data: {e}"}
+
+        # Write each byte using GDB set command
+        # Format: set {char}address = value
+        bytes_written = 0
+        for i, byte in enumerate(bytes_data):
+            cmd = f"set {{char}}({address}+{i}) = {byte}"
+            result = self.execute_command(cmd)
+            if result.get("status") == "error":
+                return {
+                    "status": "error",
+                    "message": f"Failed to write byte {i}: {result.get('message')}",
+                    "bytes_written": bytes_written,
+                }
+            bytes_written += 1
+
+        return {
+            "status": "success",
+            "address": address,
+            "bytes_written": bytes_written,
+            "data": hex_data,
+        }
+
+    def disassemble(self, location: Optional[str] = None, count: int = 20) -> dict[str, Any]:
+        """
+        Disassemble instructions at a location.
+
+        Args:
+            location: Function name, address, or None for current PC
+            count: Number of instructions to disassemble
+
+        Returns:
+            Dict with list of instructions
+        """
+        if not self.controller:
+            return {"status": "error", "message": "No active GDB session"}
+
+        # Build disassemble command
+        # Use x/i for instruction-level disassembly with count
+        if location:
+            cmd = f"x/{count}i {location}"
+        else:
+            cmd = f"x/{count}i $pc"
+
+        result = self.execute_command(cmd)
+
+        if result["status"] == "error":
+            return result
+
+        # Parse the output into structured format
+        output = result.get("output", "")
+        instructions = []
+
+        for line in output.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            # Parse instruction line
+            # Format: "0x401000 <main+0>:  push   rbp" or "0x401000:  push   %rbp"
+            parts = line.split(":", 1)
+            if len(parts) == 2:
+                addr_part = parts[0].strip()
+                instr_part = parts[1].strip()
+
+                # Extract address (first hex value)
+                addr = ""
+                for word in addr_part.split():
+                    if word.startswith("0x"):
+                        addr = word
+                        break
+
+                instructions.append(
+                    {
+                        "address": addr,
+                        "instruction": instr_part,
+                        "raw": line,
+                    }
+                )
+
+        return {
+            "status": "success",
+            "location": location or "$pc",
+            "count": len(instructions),
+            "instructions": instructions,
+        }
+
+    def set_watchpoint(self, expression: str, watch_type: str = "write") -> dict[str, Any]:
+        """
+        Set a watchpoint on an expression.
+
+        Args:
+            expression: Expression to watch (e.g., '*0x404000', 'variable')
+            watch_type: 'write', 'read', or 'access'
+
+        Returns:
+            Dict with watchpoint information
+        """
+        if not self.controller:
+            return {"status": "error", "message": "No active GDB session"}
+
+        # Map watch_type to GDB command
+        if watch_type == "write":
+            cmd = f"watch {expression}"
+        elif watch_type == "read":
+            cmd = f"rwatch {expression}"
+        elif watch_type == "access":
+            cmd = f"awatch {expression}"
+        else:
+            return {"status": "error", "message": f"Invalid watch_type: {watch_type}"}
+
+        result = self.execute_command(cmd)
+
+        if result["status"] == "error":
+            return result
+
+        # Parse watchpoint number from output
+        output = result.get("output", "")
+        wp_number = None
+
+        # Output format: "Hardware watchpoint 2: *0x404000"
+        import re
+
+        match = re.search(r"watchpoint (\d+):", output)
+        if match:
+            wp_number = int(match.group(1))
+
+        return {
+            "status": "success",
+            "expression": expression,
+            "watch_type": watch_type,
+            "watchpoint_number": wp_number,
+            "output": output.strip(),
+        }

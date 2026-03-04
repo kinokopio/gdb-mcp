@@ -278,3 +278,124 @@ Get local variables for a stack frame.
 
 ### `gdb_get_registers`
 Get CPU register values for the current frame.
+
+## Memory Operations
+
+### `gdb_read_memory`
+Read memory from the target process with structured output.
+
+**Parameters:**
+- `address`: Memory address to read from (e.g., "0x404000", "$rsp", "$rdi+0x10")
+- `size`: Number of bytes to read (default: 64)
+- `format`: Output format - "hex" (space-separated), "bytes" (raw hex), "string" (null-terminated)
+
+**Returns:**
+- `status`: "success" or "error"
+- `address`: The address that was read
+- `size`: Number of bytes read
+- `format`: The output format used
+- `data`: The memory contents in the requested format
+
+**Examples:**
+```json
+{"address": "0x404000", "size": 32, "format": "hex"}
+{"address": "$rsp", "size": 8, "format": "bytes"}
+{"address": "$rdi", "size": 256, "format": "string"}
+```
+
+**Use cases:**
+- Extract decrypted C2 addresses or configuration data
+- Read shellcode or dynamically generated code
+- Inspect data structures in memory
+- Dump stack or heap contents
+
+### `gdb_write_memory`
+Write data to memory in the target process.
+
+**Parameters:**
+- `address`: Memory address to write to (e.g., "0x404000")
+- `data`: Hex string to write (spaces optional, e.g., "90 90 90 90" or "90909090")
+
+**Returns:**
+- `status`: "success" or "error"
+- `address`: The address written to
+- `bytes_written`: Number of bytes successfully written
+- `data`: The hex data that was written
+
+**Examples:**
+```json
+{"address": "0x401234", "data": "90 90 90 90"}
+{"address": "0x401234", "data": "9090909090"}
+{"address": "$rip", "data": "EB00"}
+```
+
+**Use cases:**
+- Patch anti-debugging checks (NOP out ptrace calls)
+- Modify conditional jumps to bypass checks
+- Inject test data into memory
+- Disable security checks or validation
+
+**WARNING:** This modifies the target process memory and may affect program behavior. Use with caution.
+
+### `gdb_disassemble`
+Disassemble instructions at a location with structured output.
+
+**Parameters:**
+- `location`: Location to disassemble - function name, address, or empty for current PC
+- `count`: Number of instructions to disassemble (default: 20)
+
+**Returns:**
+- `status`: "success" or "error"
+- `location`: The location that was disassembled
+- `count`: Number of instructions returned
+- `instructions`: Array of instruction objects
+
+**Each instruction object contains:**
+- `address`: Memory address of the instruction
+- `instruction`: The disassembled instruction text
+- `raw`: The raw output line from GDB
+
+**Examples:**
+```json
+{"location": "main", "count": 30}
+{"location": "0x401000", "count": 10}
+{"count": 20}
+```
+
+**Use cases:**
+- Analyze obfuscated or packed code
+- Understand control flow at specific locations
+- Find specific instruction patterns
+- Verify patches were applied correctly
+
+### `gdb_set_watchpoint`
+Set a watchpoint to break when memory is accessed.
+
+**Parameters:**
+- `expression`: Expression to watch (e.g., "*0x404000", "variable_name")
+- `watch_type`: Type of watchpoint - "write", "read", or "access"
+
+**Returns:**
+- `status`: "success" or "error"
+- `expression`: The expression being watched
+- `watch_type`: The type of watchpoint
+- `watchpoint_number`: The watchpoint number (for deletion via gdb_delete_breakpoint)
+- `output`: Raw GDB output
+
+**Watch types:**
+- `write`: Break when the memory is written to
+- `read`: Break when the memory is read from
+- `access`: Break on any access (read or write)
+
+**Examples:**
+```json
+{"expression": "*0x404000", "watch_type": "write"}
+{"expression": "config_buffer", "watch_type": "access"}
+{"expression": "*($rsp+0x10)", "watch_type": "read"}
+```
+
+**Use cases:**
+- Detect self-modifying code (SMC)
+- Track when specific memory is written
+- Find where configuration values are set
+- Monitor sensitive data access
