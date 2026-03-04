@@ -25,9 +25,9 @@ services:
       retries: 3
       start_period: 10s
 
-  gdb-sandbox:
+  gdb-target:
     image: ubuntu:22.04
-    container_name: gdb-sandbox
+    container_name: gdb-target-container
     command: ["sleep", "infinity"]
     volumes:
       - /tmp/gdb-samples:/samples:ro
