@@ -1,0 +1,39 @@
+services:
+  gdb-mcp:
+    build: .
+    image: threatscope/gdb-mcp:latest
+    container_name: gdb-mcp-server
+    ports:
+      - "8081:8081"
+    environment:
+      - GDB_PATH=/usr/bin/gdb
+      - GDB_MCP_LOG_LEVEL=INFO
+      - GDB_MCP_MODE=sse
+      - GDB_MCP_HOST=0.0.0.0
+      - GDB_MCP_PORT=8081
+    volumes:
+      - /tmp/gdb-samples:/samples:ro
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/sse"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  gdb-sandbox:
+    image: ubuntu:22.04
+    container_name: gdb-sandbox
+    command: ["sleep", "infinity"]
+    volumes:
+      - /tmp/gdb-samples:/samples:ro
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    network_mode: "none"
+    restart: unless-stopped

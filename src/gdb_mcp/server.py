@@ -580,18 +580,72 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(error_result, indent=2))]
 
 
-async def main():
-    """Main async entry point for the MCP server."""
+async def main_stdio():
+    """Run MCP server in stdio mode (for local/subprocess use)."""
     from mcp.server.stdio import stdio_server
 
     async with stdio_server() as (read_stream, write_stream):
-        logger.info("GDB MCP Server starting...")
+        logger.info("GDB MCP Server starting (stdio mode)...")
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
+async def main_sse(host: str = "0.0.0.0", port: int = 8081):
+    """Run MCP server in SSE mode (for Docker/HTTP use)."""
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    import uvicorn
+
+    sse = SseServerTransport("/messages")
+
+    async def handle_sse(request):
+        async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+            await app.run(streams[0], streams[1], app.create_initialization_options())
+
+    async def handle_messages(request):
+        await sse.handle_post_message(request.scope, request.receive, request._send)
+
+    starlette_app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+        ],
+    )
+
+    logger.info(f"GDB MCP Server starting (SSE mode) on {host}:{port}...")
+    config = uvicorn.Config(starlette_app, host=host, port=port, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 def run_server():
-    """Synchronous entry point for the MCP server (for script entry point)."""
-    asyncio.run(main())
+    """Run MCP server based on environment configuration."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="GDB MCP Server")
+    parser.add_argument(
+        "--mode",
+        choices=["stdio", "sse"],
+        default=os.environ.get("GDB_MCP_MODE", "stdio"),
+        help="Server mode: stdio (default) or sse (HTTP)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("GDB_MCP_HOST", "0.0.0.0"),
+        help="Host for SSE mode (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("GDB_MCP_PORT", "8081")),
+        help="Port for SSE mode (default: 8081)",
+    )
+    args = parser.parse_args()
+
+    if args.mode == "sse":
+        asyncio.run(main_sse(host=args.host, port=args.port))
+    else:
+        asyncio.run(main_stdio())
 
 
 if __name__ == "__main__":
