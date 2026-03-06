@@ -594,7 +594,7 @@ async def main_sse(host: str = "0.0.0.0", port: int = 8081):
     from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
     from starlette.routing import Route
-    from starlette.responses import Response
+    from starlette.responses import Response, JSONResponse
     import uvicorn
 
     sse = SseServerTransport("/messages")
@@ -608,10 +608,14 @@ async def main_sse(host: str = "0.0.0.0", port: int = 8081):
         await sse.handle_post_message(request.scope, request.receive, request._send)
         return Response()
 
+    async def handle_health(request):
+        return JSONResponse({"status": "healthy"})
+
     starlette_app = Starlette(
         routes=[
             Route("/sse", endpoint=handle_sse),
             Route("/messages", endpoint=handle_messages, methods=["POST"]),
+            Route("/health", endpoint=handle_health),
         ],
     )
 
