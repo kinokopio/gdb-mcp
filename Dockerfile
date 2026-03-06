@@ -6,6 +6,7 @@ LABEL description="GDB MCP Server for AI-driven dynamic analysis"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gdb \
     gdbserver \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -22,5 +23,8 @@ ENV GDB_MCP_HOST=0.0.0.0
 ENV GDB_MCP_PORT=8081
 
 EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -sf http://localhost:8081/health || exit 1
 
 ENTRYPOINT ["gdb-mcp-server", "--mode", "sse"]
