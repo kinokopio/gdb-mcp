@@ -593,20 +593,24 @@ async def main_sse(host: str = "0.0.0.0", port: int = 8081):
     """Run MCP server in SSE mode (for Docker/HTTP use)."""
     from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
-    from starlette.routing import Route
+    from starlette.routing import Route, Mount
     from starlette.responses import Response, JSONResponse
     import uvicorn
 
-    sse = SseServerTransport("/messages")
+    sse = SseServerTransport("/messages/")
+
+    # ResponseNoOp: SSE transport handles the full ASGI response directly.
+    # Starlette still expects the endpoint to return a Response, but the transport
+    # has already sent http.response.start/body. This class nullifies the redundant
+    # response to avoid "Unexpected ASGI message" errors.
+    class ResponseNoOp(Response):
+        async def __call__(self, scope, receive, send) -> None:
+            return
 
     async def handle_sse(request):
         async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
             await app.run(streams[0], streams[1], app.create_initialization_options())
-        return Response()
-
-    async def handle_messages(request):
-        await sse.handle_post_message(request.scope, request.receive, request._send)
-        return Response()
+        return ResponseNoOp()
 
     async def handle_health(request):
         return JSONResponse({"status": "healthy"})
@@ -614,7 +618,8 @@ async def main_sse(host: str = "0.0.0.0", port: int = 8081):
     starlette_app = Starlette(
         routes=[
             Route("/sse", endpoint=handle_sse),
-            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+            # Mount sse.handle_post_message directly as ASGI app (recommended by MCP SDK)
+            Mount("/messages/", app=sse.handle_post_message),
             Route("/health", endpoint=handle_health),
         ],
     )
